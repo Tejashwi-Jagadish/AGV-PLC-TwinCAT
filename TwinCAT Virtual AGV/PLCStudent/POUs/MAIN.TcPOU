@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="MAIN" Id="{c85ca7f7-62e4-4195-a50a-ed021ea2dff4}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+    
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[RunStudent();]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

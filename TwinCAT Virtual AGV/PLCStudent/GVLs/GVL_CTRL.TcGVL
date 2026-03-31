@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_CTRL" Id="{fc40225f-f9d5-41eb-91a0-cbabdd5e9743}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+VAR_GLOBAL
+    // ── HMI Pushbuttons 
+    xStartPB        : BOOL;   (* Start button from HMI *)
+    xStopPB         : BOOL;   (* Stop button from HMI *)
+    xResetPB        : BOOL;   (* Reset button from HMI *)
+
+    // ── HMI Lamps 
+    xReadyLamp      : BOOL;   (* Green - ready to accept command *)
+    xMovingLamp     : BOOL;   (* Blue - AGV is moving *)
+    xStopLamp       : BOOL;   (* Red - emergency stop active *)
+
+    // ── Target Selection 
+    iTarget         : INT;    (* 1=HOME 2=A 3=B 4=C 5=D *)
+
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

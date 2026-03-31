@@ -1,0 +1,300 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_AGVComm" Id="{f5d0211d-4bd1-4bde-b6b5-5718fc6f5b49}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_AGVComm
+VAR_INPUT
+    // Receives strobe FROM Slave (linked from PLCSim.GVL.qxPLCStrobe via GVL)
+    ixAGVStrobe : BOOL;
+END_VAR
+VAR_OUTPUT
+    // Strobe TO Slave → caller copies to GVL.ixPLCStrobe
+    qxPLCStrobe : BOOL;
+    // Position command → caller copies to GVL.iiGotoPos
+    qiGotoPos   : INT;
+END_VAR
+VAR
+    step : INT := 0;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// ════════════════════════════════════════════════════════════════════════
+// FB_AGVComm — AGV Communication Function Block
+//
+// PURPOSE:
+//   Manages all handshake communication between PLCStudent (Master)
+//   and PLCSim (Slave) using a strobe-based protocol.
+//   Also controls all HMI lamp states through GVL flags.
+//
+// HANDSHAKE PROTOCOL SUMMARY:
+//   Master raises qxPLCStrobe → Slave acknowledges with ixAGVStrobe HIGH
+//   Master drops  qxPLCStrobe → Slave begins executing task
+//   Slave raises  ixAGVStrobe → task done, position confirmed
+//   Master raises qxPLCStrobe → final acknowledgement to Slave
+//   Slave drops   ixAGVStrobe → cycle complete
+//
+// STATE MACHINE OVERVIEW:
+//   Step  0       : IDLE        — wait for Start, Reset, or Stop command
+//   Step  10      : SEND        — strobe sent, wait for Slave acknowledge
+//   Step  20      : ACK WAIT    — wait for Slave to drop strobe (AGV moving)
+//   Step  25      : ARRIVAL     — wait for Slave to confirm position reached
+//   Step  30      : CONFIRM     — send final ack, wait for Slave to drop
+//   Step  35      : DONE        — movement complete, return to IDLE
+//   Steps 40–50   : STOP/RESET  — emergency stop and homing sequence
+// ════════════════════════════════════════════════════════════════════════
+CASE step OF
+0:
+    GVL.qxReadyLed := TRUE;
+    GVL.qxStopLED := FALSE;
+    GVL.qxMoveLed := FALSE;
+    GVL.ixStopPressed := FALSE;
+    GVL.ixResetPressed := FALSE;
+    IF GVL.qxStopNow THEN
+// Emergency stop triggered in idle — go TO stop sequence
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;      // Immediately on
+        GVL.qxMoveLed := FALSE;     // Immediately off
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+        
+    ELSIF GVL.ixReset THEN
+// Reset pressed — send AGV to HOME (position 1)
+        qiGotoPos := 1;
+        qxPLCStrobe := TRUE;
+        GVL.ixResetPressed := TRUE;
+        GVL.qxReadyLed := TRUE;
+        GVL.qxMoveLed := FALSE;
+        step := 10;
+        
+    ELSIF GVL.qxStartButton AND GVL.oxCurrentPos <> 0 THEN
+// Start pressed with valid target — begin movement
+        GVL.qxReadyLed := FALSE;
+        GVL.qxMoveLed := TRUE;
+        qxPLCStrobe := TRUE;
+        qiGotoPos := GVL.oxCurrentPos;
+        step := 10;
+    END_IF
+
+10:
+    IF GVL.qxStopNow THEN
+// Stop pressed during movement — abort immediately
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;      // Immediately on
+        GVL.qxMoveLed := FALSE;     // Immediately off
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF ixAGVStrobe AND GVL.iiAtPos = 0 THEN
+ // Slave acknowledged — AGV is moving (iiAtPos=0 means not yet arrived)
+        GVL.ixIndicatorCon  := TRUE;    // Set moving indicator flag
+        qxPLCStrobe         := FALSE;   // Drop Master strobe to confirm receipt
+        step                := 20;
+    ELSIF NOT ixAGVStrobe AND NOT qxPLCStrobe THEN
+ // Strobe dropped unexpectedly — re-raise to ensure Slave receives it
+        qxPLCStrobe := TRUE;
+    END_IF
+
+20:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;      // Immediately on
+        GVL.qxMoveLed := FALSE;     // Immediately off
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF NOT ixAGVStrobe THEN
+// Slave dropped strobe — AGV is moving, wait for arrival
+        step := 25;
+    END_IF
+
+25:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;      // Immediately on
+        GVL.qxMoveLed := FALSE;     // Immediately off
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF ixAGVStrobe AND GVL.iiAtPos <> 0 THEN
+ // AGV arrived at target — acknowledge and update position display
+        qxPLCStrobe := TRUE;
+        GVL.qxIndicator := qiGotoPos;
+        GVL.ixIndicatorCon := FALSE;
+        qiGotoPos := 0;
+        step := 30;
+    END_IF
+
+30:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;      // Immediately on
+        GVL.qxMoveLed := FALSE;     // Immediately off
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF NOT ixAGVStrobe AND GVL.iiAtPos = 0 THEN
+// Slave confirmed — handshake complete, stop movement lamp
+        qxPLCStrobe := FALSE;
+        GVL.qxMoveLed := FALSE;
+        step := 35;
+    END_IF
+
+35:
+    GVL.qxReadyLed := TRUE;
+    step := 0;
+
+40:
+    qiGotoPos := 6;
+    qxPLCStrobe := FALSE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    step := 41;
+
+41:
+    qiGotoPos := 6;
+    qxPLCStrobe := TRUE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    IF ixAGVStrobe THEN
+        qxPLCStrobe := FALSE;
+        step := 42;
+    END_IF
+
+42:
+    qiGotoPos := 0;
+    qxPLCStrobe := FALSE;   // Raise Master strobe
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    IF NOT ixAGVStrobe THEN
+// Slave acknowledged stop — drop Master strobe
+        step := 43;
+    END_IF
+
+43:
+    qiGotoPos := 0;
+    qxPLCStrobe := FALSE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    IF ixAGVStrobe THEN
+        qxPLCStrobe := TRUE;
+        step := 44;
+    END_IF
+
+44:
+    qiGotoPos := 0;
+    qxPLCStrobe := TRUE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    IF NOT ixAGVStrobe THEN
+        qxPLCStrobe := FALSE;
+        step := 45;
+    END_IF
+
+45:
+    qiGotoPos := 0;
+    qxPLCStrobe := FALSE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxMoveLed := FALSE;
+    IF NOT ixAGVStrobe THEN
+        step := 46;
+    END_IF
+
+46:
+    qiGotoPos := 0;
+    qxPLCStrobe := FALSE;
+    GVL.qxStopLED := TRUE;
+    GVL.qxReadyLed := FALSE;
+    GVL.qxMoveLed := FALSE;
+    GVL.ixStopPressed := TRUE;
+    IF GVL.ixReset THEN
+// Reset accepted — clear stop state, send AGV HOME
+        GVL.ixResetPressed := TRUE;
+        GVL.qxStopLED := FALSE;
+        GVL.ixStopPressed := FALSE;
+        GVL.qxStopNow := FALSE;
+        qiGotoPos := 1;
+        qxPLCStrobe := TRUE;
+        step := 47;
+    END_IF
+
+47:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;
+        GVL.qxMoveLed := FALSE;
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF ixAGVStrobe AND GVL.iiAtPos = 0 THEN
+// Slave acknowledged HOME command — AGV moving home
+        GVL.ixIndicatorCon := TRUE;
+        qxPLCStrobe := FALSE;
+        step := 48;
+    ELSIF NOT ixAGVStrobe AND NOT qxPLCStrobe THEN
+        qxPLCStrobe := TRUE;
+    END_IF
+// STEP 48 — Wait for Slave to drop strobe (homing in progress)
+48:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;
+        GVL.qxMoveLed := FALSE;
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF NOT ixAGVStrobe THEN
+        step := 49;
+    END_IF
+
+49:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;
+        GVL.qxMoveLed := FALSE;
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF ixAGVStrobe AND GVL.iiAtPos <> 0 THEN
+// HOME reached — acknowledge and update display
+        qxPLCStrobe := TRUE;
+        GVL.qxIndicator := qiGotoPos;
+        GVL.ixIndicatorCon := FALSE;
+        qiGotoPos := 0;
+        step := 50;
+    END_IF
+
+50:
+    IF GVL.qxStopNow THEN
+        GVL.ixStopPressed := TRUE;
+        GVL.qxReadyLed := FALSE;
+        GVL.qxStopLED := TRUE;
+        GVL.qxMoveLed := FALSE;
+        qxPLCStrobe := FALSE;
+        qiGotoPos := 6;
+        step := 40;
+    ELSIF NOT ixAGVStrobe AND GVL.iiAtPos = 0 THEN
+// Homing complete — clear all stop/reset flags, return to IDLE		
+        qxPLCStrobe := FALSE;
+        GVL.qxMoveLed := FALSE;
+        GVL.ixResetPressed := FALSE;
+        GVL.qxReadyLed := TRUE;
+        step := 0;
+    END_IF
+
+END_CASE]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

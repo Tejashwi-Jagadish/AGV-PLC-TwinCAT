@@ -1,0 +1,139 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="RunStudent" Id="{b117d681-6d7a-4a0b-80a8-02e563b6026b}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM RunStudent
+VAR
+    fbAGV           : FB_AGVComm;
+    rStart          : R_TRIG;
+    rStop           : R_TRIG;
+    rReset          : R_TRIG;
+    tonBlinkOn      : TON;
+    tonBlinkOff     : TON;
+    xBlinkState     : BOOL;
+    xBlinkRunning   : BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// ════════════════════════════════════════════════════════════════
+// 1. BLINK GENERATOR — 500ms ON / 500ms OFF
+// ════════════════════════════════════════════════════════════════
+tonBlinkOn (IN := NOT xBlinkState AND xBlinkRunning, PT := T#500MS);
+tonBlinkOff(IN := xBlinkState     AND xBlinkRunning, PT := T#500MS);
+
+IF tonBlinkOn.Q  THEN xBlinkState := TRUE;  END_IF
+IF tonBlinkOff.Q THEN xBlinkState := FALSE; END_IF
+IF NOT xBlinkRunning THEN xBlinkState := FALSE; END_IF
+
+
+// ════════════════════════════════════════════════════════════════
+// 2. BRIDGE HMI INPUTS — GVL_CTRL → GVL
+// ════════════════════════════════════════════════════════════════
+GVL.ixStart      := GVL_CTRL.xStartPB;
+GVL.ixStop       := GVL_CTRL.xStopPB;
+GVL.ixReset      := GVL_CTRL.xResetPB;
+GVL.oxCurrentPos := GVL_CTRL.iTarget;
+
+
+// ════════════════════════════════════════════════════════════════
+// 3. EDGE DETECTION
+// ════════════════════════════════════════════════════════════════
+rStart(CLK := GVL_CTRL.xStartPB);
+rStop (CLK := GVL_CTRL.xStopPB);
+rReset(CLK := GVL_CTRL.xResetPB);
+
+
+// ════════════════════════════════════════════════════════════════
+// 4. LATCH START — only when idle, no stop active
+// ════════════════════════════════════════════════════════════════
+IF rStart.Q AND NOT GVL.qxStopNow AND NOT GVL.qxMoveLed THEN
+    GVL.qxStartButton := TRUE;
+END_IF
+
+// Clear start trigger once AGV begins moving
+IF GVL.qxMoveLed THEN
+    GVL.qxStartButton := FALSE;
+END_IF
+
+
+// ════════════════════════════════════════════════════════════════
+// 5. LATCH STOP — only during movement
+// ════════════════════════════════════════════════════════════════
+IF rStop.Q AND GVL.qxMoveLed THEN
+    GVL.qxStopNow := TRUE;
+END_IF
+
+
+// ════════════════════════════════════════════════════════════════
+// 6. CALL AGV COMMUNICATION FB
+// ════════════════════════════════════════════════════════════════
+fbAGV(
+    ixAGVStrobe := GVL.ixAGVStrobe
+);
+
+// Copy FB outputs → GVL (linked to PLCSim via AT %Q*)
+GVL.ixPLCStrobe := fbAGV.qxPLCStrobe;
+GVL.iiGotoPos   := fbAGV.qiGotoPos;
+
+
+// ════════════════════════════════════════════════════════════════
+// 7. LAMP CONTROL
+// ════════════════════════════════════════════════════════════════
+
+// ── Ready / Start Lamp 
+// Blinking  = idle, waiting for operator to press Start
+// Steady ON = Start pressed, AGV about to move
+// OFF       = AGV moving or stop active
+IF GVL.qxStopLED THEN
+    // Stop state — ready lamp off
+    GVL_CTRL.xReadyLamp := FALSE;
+    xBlinkRunning        := FALSE;
+
+ELSIF GVL.qxMoveLed THEN
+    // AGV moving — ready lamp off
+    GVL_CTRL.xReadyLamp := FALSE;
+    xBlinkRunning        := FALSE;
+
+ELSIF GVL.qxStartButton THEN
+    // Start latched, waiting for AGV to begin — steady ON
+    GVL_CTRL.xReadyLamp := TRUE;
+    xBlinkRunning        := FALSE;
+
+ELSIF GVL.qxReadyLed THEN
+    // Idle and ready — blink
+    xBlinkRunning       := TRUE;
+    GVL_CTRL.xReadyLamp := xBlinkState;
+
+ELSE
+    GVL_CTRL.xReadyLamp := FALSE;
+    xBlinkRunning        := FALSE;
+END_IF
+
+
+// ── Moving Lamp 
+// Blinking = AGV moving toward target
+// OFF      = AGV idle or at target
+IF GVL.qxMoveLed THEN
+    xBlinkRunning        := TRUE;
+    GVL_CTRL.xMovingLamp := xBlinkState;
+ELSE
+    GVL_CTRL.xMovingLamp := FALSE;
+END_IF
+
+
+// ── Stop Lamp — steady red, unchanged 
+GVL_CTRL.xStopLamp := GVL.qxStopLED;
+
+
+// ════════════════════════════════════════════════════════════════
+// 8. POSITION TEXT FOR HMI DISPLAY
+// ════════════════════════════════════════════════════════════════
+CASE GVL.qxIndicator OF
+    1: GVL.sPosition := 'HOME';
+    2: GVL.sPosition := 'A';
+    3: GVL.sPosition := 'B';
+    4: GVL.sPosition := 'C';
+    5: GVL.sPosition := 'D';
+    ELSE GVL.sPosition := '';
+END_CASE]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
