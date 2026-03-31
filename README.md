@@ -172,4 +172,4 @@ Key design decisions:
 
 **Tejashwi Jagadish**
 University West – Department of Engineering Science
-Course: PLC Programming, Communication and HMI (ATM700)
+
